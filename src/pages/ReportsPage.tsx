@@ -24,6 +24,7 @@ import {
 } from 'recharts';
 
 import { adminDatabaseService } from '../services/adminDatabaseService';
+import { clinicalScoreService } from '../services/clinicalScoreService';
 
 type ReportUser = {
   uid: string;
@@ -52,6 +53,10 @@ type ChildReport = {
   symptomCount: number;
   adherence: number;
   status: 'Boa adesão' | 'Atenção' | 'Crítico';
+  clinicalScore: number;
+  clinicalRisk: 'Baixo' | 'Moderado' | 'Alto';
+  clinicalSummary: string;
+  clinicalAlerts: string[];
 };
 
 export default function ReportsPage() {
@@ -78,26 +83,26 @@ export default function ReportsPage() {
     return users.flatMap((user) =>
       user.children.map((child) => {
         const childUsage = user.orthosisUsage.filter(
-          (item) => item.child === child.id
+          (item) => item.child === child.id,
         );
 
         const childChecklists = user.checklists.filter(
-          (item) => item.child === child.id
+          (item) => item.child === child.id,
         );
 
         const childSymptoms = user.symptoms.filter(
-          (item) => item.child === child.id
+          (item) => item.child === child.id,
         );
 
         const totalHours = childUsage.reduce(
           (sum, item) => sum + Number(item.usage_hours || 0),
-          0
+          0,
         );
 
         const expectedDays = Number(period);
         const adherence = Math.min(
           100,
-          Math.round((childUsage.length / expectedDays) * 100)
+          Math.round((childUsage.length / expectedDays) * 100),
         );
 
         const status =
@@ -107,8 +112,15 @@ export default function ReportsPage() {
               ? 'Atenção'
               : 'Crítico';
 
+        const clinicalAnalysis = clinicalScoreService.analyze({
+          usageCount: childUsage.length,
+          checklistCount: childChecklists.length,
+          symptomCount: childSymptoms.length,
+          totalHours,
+        });
+
         return {
-          id: child.id,
+          id: `${user.uid}-${child.id}`,
           name: child.name,
           parentName: user.profile?.full_name || 'Responsável não informado',
           parentEmail: user.profile?.email || '',
@@ -121,8 +133,12 @@ export default function ReportsPage() {
           symptomCount: childSymptoms.length,
           adherence,
           status,
+          clinicalScore: clinicalAnalysis.score,
+          clinicalRisk: clinicalAnalysis.risk,
+          clinicalSummary: clinicalAnalysis.summary,
+          clinicalAlerts: clinicalAnalysis.alerts,
         };
-      })
+      }),
     );
   }, [users, period]);
 
@@ -139,49 +155,51 @@ export default function ReportsPage() {
         ? 0
         : Math.round(
             childrenReports.reduce((sum, child) => sum + child.adherence, 0) /
-              totalChildren
+              totalChildren,
+          );
+
+    const averageClinicalScore =
+      totalChildren === 0
+        ? 0
+        : Math.round(
+            childrenReports.reduce(
+              (sum, child) => sum + child.clinicalScore,
+              0,
+            ) / totalChildren,
           );
 
     const totalHours = childrenReports.reduce(
       (sum, child) => sum + child.totalHours,
-      0
+      0,
     );
 
     const totalSymptoms = childrenReports.reduce(
       (sum, child) => sum + child.symptomCount,
-      0
-    );
-
-    const totalExp = childrenReports.reduce(
-      (sum, child) => sum + child.totalExp,
-      0
+      0,
     );
 
     return {
       totalChildren,
       averageAdherence,
+      averageClinicalScore,
       totalHours,
       totalSymptoms,
-      totalExp,
     };
+  }, [childrenReports]);
+
+  const criticalChildren = useMemo(() => {
+    return [...childrenReports]
+      .filter(
+        (child) =>
+          child.status !== 'Boa adesão' || child.clinicalRisk === 'Alto',
+      )
+      .sort((a, b) => a.clinicalScore - b.clinicalScore)
+      .slice(0, 5);
   }, [childrenReports]);
 
   const topGamification = useMemo(() => {
     return [...childrenReports]
       .sort((a, b) => b.totalExp - a.totalExp)
-      .slice(0, 5);
-  }, [childrenReports]);
-
-  const criticalChildren = useMemo(() => {
-    return [...childrenReports]
-      .filter((child) => child.status !== 'Boa adesão')
-      .sort((a, b) => a.adherence - b.adherence)
-      .slice(0, 5);
-  }, [childrenReports]);
-
-  const symptomRanking = useMemo(() => {
-    return [...childrenReports]
-      .sort((a, b) => b.symptomCount - a.symptomCount)
       .slice(0, 5);
   }, [childrenReports]);
 
@@ -192,19 +210,12 @@ export default function ReportsPage() {
     }));
   }, [filteredChildren]);
 
-  const symptomsChartData = useMemo(() => {
-    return symptomRanking.map((child) => ({
+  const clinicalScoreChartData = useMemo(() => {
+    return filteredChildren.slice(0, 8).map((child) => ({
       name: child.name,
-      sintomas: child.symptomCount,
+      score: child.clinicalScore,
     }));
-  }, [symptomRanking]);
-
-  const gamificationChartData = useMemo(() => {
-    return topGamification.map((child) => ({
-      name: child.name,
-      exp: child.totalExp,
-    }));
-  }, [topGamification]);
+  }, [filteredChildren]);
 
   function exportReportsCsv() {
     const headers = [
@@ -212,6 +223,8 @@ export default function ReportsPage() {
       'Responsavel',
       'Email',
       'Adesao',
+      'Score Clinico',
+      'Risco Clinico',
       'Horas de Ortese',
       'Checklists',
       'Sintomas',
@@ -226,6 +239,8 @@ export default function ReportsPage() {
       child.parentName,
       child.parentEmail || 'Nao informado',
       `${child.adherence}%`,
+      `${child.clinicalScore}/100`,
+      child.clinicalRisk,
       `${child.totalHours}h`,
       child.checklistCount,
       child.symptomCount,
@@ -272,30 +287,21 @@ export default function ReportsPage() {
         <div>
           <h2 className="page-title">Relatórios Clínicos</h2>
           <p className="page-description">
-            Relatório visual de adesão à órtese, sintomas e gamificação.
+            Relatório de adesão, score clínico, sintomas e gamificação.
           </p>
         </div>
 
         <div className="reports-actions">
-          <button
-            className="secondary-button reports-refresh"
-            onClick={loadReports}
-          >
+          <button className="secondary-button reports-refresh" onClick={loadReports}>
             <RefreshCcw size={17} />
             Atualizar
           </button>
 
-          <button
-            className="secondary-button reports-refresh"
-            onClick={exportReportsCsv}
-          >
+          <button className="secondary-button reports-refresh" onClick={exportReportsCsv}>
             Exportar CSV
           </button>
 
-          <button
-            className="primary-button reports-refresh"
-            onClick={printReportsPage}
-          >
+          <button className="primary-button reports-refresh" onClick={printReportsPage}>
             Imprimir PDF
           </button>
         </div>
@@ -306,8 +312,6 @@ export default function ReportsPage() {
           <label htmlFor="reports-period">Período analisado</label>
           <select
             id="reports-period"
-            title="Selecionar período analisado"
-            aria-label="Selecionar período analisado"
             value={period}
             onChange={(e) => setPeriod(e.target.value)}
           >
@@ -322,8 +326,6 @@ export default function ReportsPage() {
           <label htmlFor="reports-status">Status de adesão</label>
           <select
             id="reports-status"
-            title="Selecionar status de adesão"
-            aria-label="Selecionar status de adesão"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
           >
@@ -336,10 +338,37 @@ export default function ReportsPage() {
       </section>
 
       <section className="metrics-grid">
-        <MetricCard title="Adesão média" value={`${metrics.averageAdherence}%`} description="Média geral no período" icon={<BarChart3 size={22} />} tone="lilac" />
-        <MetricCard title="Horas de órtese" value={`${metrics.totalHours}h`} description="Total registrado" icon={<Footprints size={22} />} tone="blue" />
-        <MetricCard title="Sintomas" value={metrics.totalSymptoms} description="Relatos de dor/desconforto" icon={<HeartPulse size={22} />} tone="white" />
-        <MetricCard title="EXP total" value={metrics.totalExp} description="Engajamento gamificado" icon={<Star size={22} />} tone="yellow" />
+        <MetricCard
+          title="Adesão média"
+          value={`${metrics.averageAdherence}%`}
+          description="Média geral no período"
+          icon={<BarChart3 size={22} />}
+          tone="lilac"
+        />
+
+        <MetricCard
+          title="Score clínico"
+          value={`${metrics.averageClinicalScore}/100`}
+          description="Média de risco clínico"
+          icon={<ShieldAlert size={22} />}
+          tone="yellow"
+        />
+
+        <MetricCard
+          title="Horas de órtese"
+          value={`${metrics.totalHours}h`}
+          description="Total registrado"
+          icon={<Footprints size={22} />}
+          tone="blue"
+        />
+
+        <MetricCard
+          title="Sintomas"
+          value={metrics.totalSymptoms}
+          description="Relatos de dor/desconforto"
+          icon={<HeartPulse size={22} />}
+          tone="white"
+        />
       </section>
 
       <section className="reports-grid">
@@ -353,124 +382,37 @@ export default function ReportsPage() {
           </div>
 
           <div className="chart-wrapper">
-            {adherenceChartData.length === 0 ? (
-              <EmptyState text="Nenhum dado de adesão disponível." />
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={adherenceChartData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="name" />
-                  <YAxis domain={[0, 100]} />
-                  <Tooltip />
-                  <Bar dataKey="adesao" radius={[10, 10, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={adherenceChartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="name" />
+                <YAxis domain={[0, 100]} />
+                <Tooltip />
+                <Bar dataKey="adesao" radius={[10, 10, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
 
         <div className="panel-card chart-card">
           <div className="panel-title-row">
             <div>
-              <h3>Sintomas registrados</h3>
-              <p>Quantidade de sintomas/desconfortos relatados.</p>
+              <h3>Score clínico</h3>
+              <p>Comparativo do score inteligente de risco.</p>
             </div>
-            <HeartPulse size={22} />
+            <ShieldAlert size={22} />
           </div>
 
           <div className="chart-wrapper">
-            {symptomsChartData.length === 0 ? (
-              <EmptyState text="Nenhum sintoma registrado." />
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={symptomsChartData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="sintomas" radius={[10, 10, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="panel-card chart-card full-chart-card">
-        <div className="panel-title-row">
-          <div>
-            <h3>Evolução gamificada</h3>
-            <p>Comparação de EXP acumulado entre as crianças.</p>
-          </div>
-          <Trophy size={22} />
-        </div>
-
-        <div className="chart-wrapper">
-          {gamificationChartData.length === 0 ? (
-            <EmptyState text="Nenhum dado de gamificação disponível." />
-          ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={gamificationChartData}>
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={clinicalScoreChartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="name" />
-                <YAxis />
+                <YAxis domain={[0, 100]} />
                 <Tooltip />
-                <Line type="monotone" dataKey="exp" strokeWidth={3} dot={{ r: 5 }} activeDot={{ r: 7 }} />
-              </LineChart>
+                <Bar dataKey="score" radius={[10, 10, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
-          )}
-        </div>
-      </section>
-
-      <section className="reports-grid">
-        <div className="panel-card">
-          <div className="panel-title-row">
-            <div>
-              <h3>Adesão ao tratamento</h3>
-              <p>Percentual de registros de uso da órtese por criança.</p>
-            </div>
-            <Footprints size={22} />
-          </div>
-
-          <div className="report-bars">
-            {filteredChildren.length === 0 ? (
-              <EmptyState text="Nenhum dado encontrado para o filtro atual." />
-            ) : (
-              filteredChildren.slice(0, 8).map((child) => (
-                <ProgressRow
-                  key={child.id}
-                  label={child.name}
-                  value={child.adherence}
-                  helper={`${child.usageCount} registros • ${child.totalHours}h`}
-                />
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="panel-card">
-          <div className="panel-title-row">
-            <div>
-              <h3>Sintomas e desconfortos</h3>
-              <p>Crianças com maior número de relatos clínicos.</p>
-            </div>
-            <HeartPulse size={22} />
-          </div>
-
-          <div className="simple-list">
-            {symptomRanking.length === 0 ? (
-              <EmptyState text="Nenhum sintoma registrado." />
-            ) : (
-              symptomRanking.map((child) => (
-                <div className="simple-list-item" key={child.id}>
-                  <div>
-                    <strong>{child.name}</strong>
-                    <span>{child.parentName}</span>
-                  </div>
-                  <small>{child.symptomCount} sintomas</small>
-                </div>
-              ))
-            )}
           </div>
         </div>
       </section>
@@ -482,7 +424,7 @@ export default function ReportsPage() {
               <h3>Alertas clínicos</h3>
               <p>Crianças que precisam de atenção no acompanhamento.</p>
             </div>
-            <ShieldAlert size={22} />
+            <AlertTriangle size={22} />
           </div>
 
           <div className="simple-list">
@@ -494,12 +436,24 @@ export default function ReportsPage() {
                   <div className="clinical-alert-icon">
                     <AlertTriangle size={18} />
                   </div>
+
                   <div>
                     <strong>{child.name}</strong>
-                    <span>{child.parentName} • {child.adherence}% de adesão</span>
+                    <span>
+                      {child.parentName} • Score {child.clinicalScore}/100
+                    </span>
                   </div>
-                  <span className={child.status === 'Crítico' ? 'badge badge-danger' : 'badge badge-warning'}>
-                    {child.status}
+
+                  <span
+                    className={
+                      child.clinicalRisk === 'Alto'
+                        ? 'badge badge-danger'
+                        : child.clinicalRisk === 'Moderado'
+                          ? 'badge badge-warning'
+                          : 'badge badge-success'
+                    }
+                  >
+                    {child.clinicalRisk}
                   </span>
                 </div>
               ))
@@ -539,7 +493,7 @@ export default function ReportsPage() {
         <div className="table-toolbar">
           <div>
             <h3>Resumo por criança</h3>
-            <p>Visão consolidada de adesão, sintomas e gamificação.</p>
+            <p>Visão consolidada de adesão, sintomas, score clínico e gamificação.</p>
           </div>
 
           <div className="reports-table-chip">
@@ -555,6 +509,8 @@ export default function ReportsPage() {
                 <th>Criança</th>
                 <th>Responsável</th>
                 <th>Adesão</th>
+                <th>Score</th>
+                <th>Risco</th>
                 <th>Órtese</th>
                 <th>Checklists</th>
                 <th>Sintomas</th>
@@ -585,11 +541,36 @@ export default function ReportsPage() {
                     </div>
                   </td>
 
-                  <td><strong>{child.adherence}%</strong></td>
+                  <td>
+                    <strong>{child.adherence}%</strong>
+                  </td>
+
+                  <td>
+                    <strong>{child.clinicalScore}/100</strong>
+                  </td>
+
+                  <td>
+                    <span
+                      className={
+                        child.clinicalRisk === 'Alto'
+                          ? 'badge badge-danger'
+                          : child.clinicalRisk === 'Moderado'
+                            ? 'badge badge-warning'
+                            : 'badge badge-success'
+                      }
+                    >
+                      {child.clinicalRisk}
+                    </span>
+                  </td>
+
                   <td>{child.totalHours}h</td>
                   <td>{child.checklistCount}</td>
                   <td>{child.symptomCount}</td>
-                  <td><span className="badge badge-lilac">{child.totalExp} EXP</span></td>
+
+                  <td>
+                    <span className="badge badge-lilac">{child.totalExp} EXP</span>
+                  </td>
+
                   <td>
                     <span
                       className={
@@ -638,33 +619,6 @@ function MetricCard({
         <strong>{value}</strong>
         <p>{description}</p>
       </div>
-    </div>
-  );
-}
-
-function ProgressRow({
-  label,
-  value,
-  helper,
-}: {
-  label: string;
-  value: number;
-  helper: string;
-}) {
-  const safeValue = Math.max(0, Math.min(100, Math.round(value / 10) * 10));
-
-  return (
-    <div className="progress-row">
-      <div className="progress-row-header">
-        <strong>{label}</strong>
-        <span>{value}%</span>
-      </div>
-
-      <div className="progress-track">
-        <div className={`progress-fill progress-fill-${safeValue}`} />
-      </div>
-
-      <small>{helper}</small>
     </div>
   );
 }

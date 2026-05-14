@@ -12,10 +12,41 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
 const menuItems = [
-  { label: 'Dashboard', path: '/', icon: Home },
-  { label: 'Crianças', path: '/children', icon: Baby },
-  { label: 'Responsáveis', path: '/users', icon: Users },
-  { label: 'Relatórios', path: '/reports', icon: BarChart3 },
+  {
+    label: 'Dashboard',
+    path: '/',
+    icon: Home,
+  },
+
+  {
+    label: 'Crianças',
+    path: '/children',
+    icon: Baby,
+  },
+
+  {
+    label: 'Responsáveis',
+    path: '/users',
+    icon: Users,
+  },
+
+  {
+    label: 'Clínico',
+    path: '/clinical',
+    icon: Stethoscope,
+  },
+
+  {
+    label: 'Conteúdos',
+    path: '/contents',
+    icon: ClipboardList,
+  },
+
+  {
+    label: 'Relatórios',
+    path: '/reports',
+    icon: BarChart3,
+  },
 ];
 
 export default function DashboardLayout() {

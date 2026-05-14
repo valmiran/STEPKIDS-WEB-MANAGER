@@ -10,7 +10,21 @@ import {
   Users,
 } from 'lucide-react';
 
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+
 import { adminDatabaseService } from '../services/adminDatabaseService';
+import { clinicalScoreService } from '../services/clinicalScoreService';
 
 type DashboardUser = {
   uid: string;
@@ -23,6 +37,15 @@ type DashboardUser = {
   checklists: any[];
   symptoms: any[];
   activityCompletions?: Record<string, any>;
+};
+
+type DashboardChildAnalysis = {
+  id: string;
+  name: string;
+  parentName: string;
+  totalHours: number;
+  score: number;
+  risk: 'Baixo' | 'Moderado' | 'Alto';
 };
 
 export default function DashboardPage() {
@@ -43,18 +66,57 @@ export default function DashboardPage() {
     loadDashboard();
   }, []);
 
+  const childrenAnalysis = useMemo<DashboardChildAnalysis[]>(() => {
+    return users.flatMap((user) =>
+      user.children.map((child) => {
+        const childUsage = user.orthosisUsage.filter(
+          (item) => item.child === child.id,
+        );
+
+        const childChecklists = user.checklists.filter(
+          (item) => item.child === child.id,
+        );
+
+        const childSymptoms = user.symptoms.filter(
+          (item) => item.child === child.id,
+        );
+
+        const totalHours = childUsage.reduce(
+          (sum, item) => sum + Number(item.usage_hours || 0),
+          0,
+        );
+
+        const analysis = clinicalScoreService.analyze({
+          usageCount: childUsage.length,
+          checklistCount: childChecklists.length,
+          symptomCount: childSymptoms.length,
+          totalHours,
+        });
+
+        return {
+          id: `${user.uid}-${child.id}`,
+          name: child.name || 'Criança',
+          parentName: user.profile?.full_name || 'Responsável',
+          totalHours,
+          score: analysis.score,
+          risk: analysis.risk,
+        };
+      }),
+    );
+  }, [users]);
+
   const metrics = useMemo(() => {
     const totalUsers = users.length;
 
     const totalChildren = users.reduce(
       (sum, user) => sum + user.children.length,
-      0
+      0,
     );
 
     const totalOrthosisHours = users.reduce((sum, user) => {
       const totalUserHours = user.orthosisUsage.reduce(
         (usageSum, item) => usageSum + Number(item.usage_hours || 0),
-        0
+        0,
       );
 
       return sum + totalUserHours;
@@ -62,12 +124,12 @@ export default function DashboardPage() {
 
     const totalChecklists = users.reduce(
       (sum, user) => sum + user.checklists.length,
-      0
+      0,
     );
 
     const totalSymptoms = users.reduce(
       (sum, user) => sum + user.symptoms.length,
-      0
+      0,
     );
 
     const totalMissions = users.reduce((sum, user) => {
@@ -79,7 +141,7 @@ export default function DashboardPage() {
 
           return childSum + Object.keys(childCompletions).length;
         },
-        0
+        0,
       );
 
       return sum + totalByChildren;
@@ -89,13 +151,27 @@ export default function DashboardPage() {
 
     const totalExp = children.reduce(
       (sum, child) => sum + Number(child.totalExp || child.totalPoints || 0),
-      0
+      0,
     );
 
     const totalGold = children.reduce(
       (sum, child) => sum + Number(child.goldCoins || 0),
-      0
+      0,
     );
+
+    const highRisk = childrenAnalysis.filter((child) => child.risk === 'Alto').length;
+    const moderateRisk = childrenAnalysis.filter(
+      (child) => child.risk === 'Moderado',
+    ).length;
+    const lowRisk = childrenAnalysis.filter((child) => child.risk === 'Baixo').length;
+
+    const averageScore =
+      childrenAnalysis.length > 0
+        ? Math.round(
+            childrenAnalysis.reduce((sum, child) => sum + child.score, 0) /
+              childrenAnalysis.length,
+          )
+        : 0;
 
     return {
       totalUsers,
@@ -106,8 +182,12 @@ export default function DashboardPage() {
       totalMissions,
       totalExp,
       totalGold,
+      highRisk,
+      moderateRisk,
+      lowRisk,
+      averageScore,
     };
-  }, [users]);
+  }, [users, childrenAnalysis]);
 
   const recentSymptoms = useMemo(() => {
     return users
@@ -116,26 +196,51 @@ export default function DashboardPage() {
           ...symptom,
           parentName: user.profile?.full_name || 'Responsável',
           parentEmail: user.profile?.email || '',
-        }))
+        })),
       )
       .slice(-5)
       .reverse();
   }, [users]);
 
   const lowAdherenceChildren = useMemo(() => {
-    return users
-      .flatMap((user) =>
-        user.children.map((child) => ({
-          ...child,
-          parentName: user.profile?.full_name || 'Responsável',
-          usageCount: user.orthosisUsage.filter(
-            (item) => item.child === child.id
-          ).length,
-        }))
-      )
-      .filter((child) => child.usageCount === 0)
+    return childrenAnalysis
+      .filter((child) => child.risk === 'Alto' || child.score < 50)
       .slice(0, 5);
-  }, [users]);
+  }, [childrenAnalysis]);
+
+  const riskChartData = useMemo(() => {
+    return [
+      {
+        name: 'Baixo',
+        value: metrics.lowRisk,
+        color: '#22c55e',
+      },
+      {
+        name: 'Moderado',
+        value: metrics.moderateRisk,
+        color: '#f59e0b',
+      },
+      {
+        name: 'Alto',
+        value: metrics.highRisk,
+        color: '#ef4444',
+      },
+    ];
+  }, [metrics]);
+
+  const scoreChartData = useMemo(() => {
+    return childrenAnalysis.slice(0, 8).map((child) => ({
+      name: child.name,
+      score: child.score,
+    }));
+  }, [childrenAnalysis]);
+
+  const hoursChartData = useMemo(() => {
+    return childrenAnalysis.slice(0, 8).map((child) => ({
+      name: child.name,
+      horas: child.totalHours,
+    }));
+  }, [childrenAnalysis]);
 
   if (loading) {
     return (
@@ -152,7 +257,7 @@ export default function DashboardPage() {
         <div>
           <h2 className="page-title">Dashboard</h2>
           <p className="page-description">
-            Visão geral do acompanhamento clínico e gamificado do Pé de Herói.
+            Visão geral do acompanhamento clínico, gamificado e analítico do StepKids.
           </p>
         </div>
 
@@ -187,11 +292,19 @@ export default function DashboardPage() {
         />
 
         <MetricCard
-          title="Checklists"
-          value={metrics.totalChecklists}
-          description="Rotinas diárias preenchidas"
+          title="Score médio"
+          value={`${metrics.averageScore}/100`}
+          description="Média clínica geral"
           icon={<ClipboardCheck size={22} />}
           tone="yellow"
+        />
+
+        <MetricCard
+          title="Risco alto"
+          value={metrics.highRisk}
+          description="Prioridade clínica"
+          icon={<AlertTriangle size={22} />}
+          tone="white"
         />
 
         <MetricCard
@@ -199,7 +312,7 @@ export default function DashboardPage() {
           value={metrics.totalSymptoms}
           description="Relatos de dor/desconforto"
           icon={<HeartPulse size={22} />}
-          tone="white"
+          tone="lilac"
         />
 
         <MetricCard
@@ -207,7 +320,7 @@ export default function DashboardPage() {
           value={metrics.totalMissions}
           description="Missões concluídas"
           icon={<Target size={22} />}
-          tone="lilac"
+          tone="blue"
         />
 
         <MetricCard
@@ -215,16 +328,87 @@ export default function DashboardPage() {
           value={metrics.totalExp}
           description="Evolução gamificada"
           icon={<Activity size={22} />}
-          tone="blue"
-        />
-
-        <MetricCard
-          title="Moedas"
-          value={metrics.totalGold}
-          description="Economia da loja"
-          icon={<Target size={22} />}
           tone="yellow"
         />
+      </section>
+
+      <section className="reports-grid">
+        <div className="panel-card chart-card">
+          <div className="panel-title-row">
+            <div>
+              <h3>Distribuição de risco</h3>
+              <p>Quantidade de crianças por classificação clínica.</p>
+            </div>
+
+            <AlertTriangle size={22} />
+          </div>
+
+          <div className="chart-wrapper">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={riskChartData}
+                  dataKey="value"
+                  nameKey="name"
+                  outerRadius={95}
+                  label
+                >
+                  {riskChartData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.color} />
+                  ))}
+                </Pie>
+
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="panel-card chart-card">
+          <div className="panel-title-row">
+            <div>
+              <h3>Score clínico por criança</h3>
+              <p>Comparativo de adesão e risco clínico.</p>
+            </div>
+
+            <ClipboardCheck size={22} />
+          </div>
+
+          <div className="chart-wrapper">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={scoreChartData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis domain={[0, 100]} />
+                <Tooltip />
+                <Bar dataKey="score" fill="#7b4fd6" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel-card full-chart-card chart-card">
+        <div className="panel-title-row">
+          <div>
+            <h3>Horas de órtese por criança</h3>
+            <p>Comparativo dos registros de uso da órtese.</p>
+          </div>
+
+          <Footprints size={22} />
+        </div>
+
+        <div className="chart-wrapper">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={hoursChartData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip />
+              <Bar dataKey="horas" fill="#38bdf8" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       </section>
 
       <section className="dashboard-panels">
@@ -234,6 +418,7 @@ export default function DashboardPage() {
               <h3>Sintomas recentes</h3>
               <p>Últimos relatos registrados pelos responsáveis.</p>
             </div>
+
             <HeartPulse size={22} />
           </div>
 
@@ -260,9 +445,10 @@ export default function DashboardPage() {
         <div className="panel-card">
           <div className="panel-title-row">
             <div>
-              <h3>Alertas de acompanhamento</h3>
-              <p>Crianças sem registros de uso da órtese.</p>
+              <h3>Prioridades clínicas</h3>
+              <p>Crianças com risco alto ou score abaixo do esperado.</p>
             </div>
+
             <AlertTriangle size={22} />
           </div>
 
@@ -277,7 +463,7 @@ export default function DashboardPage() {
                     <span>{child.parentName}</span>
                   </div>
 
-                  <small>Sem uso registrado</small>
+                  <small>{child.score}/100 • {child.risk}</small>
                 </div>
               ))}
             </div>

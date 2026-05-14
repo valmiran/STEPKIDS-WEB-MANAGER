@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 
 import { useAuth } from '../hooks/useAuth';
+
 import LoginPage from '../pages/LoginPage';
 import DashboardLayout from '../layouts/DashboardLayout';
 import DashboardPage from '../pages/DashboardPage';
@@ -9,8 +10,9 @@ import ChildrenPage from '../pages/ChildrenPage';
 import ChildDetailsPage from '../pages/ChildDetailsPage';
 import UsersPage from '../pages/UsersPage';
 import ReportsPage from '../pages/ReportsPage';
-import NotFoundPage from '../pages/NotFoundPage';
 import ClinicalPage from '../pages/ClinicalPage';
+import EducationalContentPage from '../pages/EducationalContentPage';
+import NotFoundPage from '../pages/NotFoundPage';
 
 function PrivateRoute({ children }: { children: ReactNode }) {
   const { isAuthenticated, loading } = useAuth();
@@ -43,16 +45,14 @@ export default function AppRoutes() {
           <Route index element={<DashboardPage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="children" element={<ChildrenPage />} />
-          <Route
-            path="children/:parentUid/:childId"
-            element={<ChildDetailsPage />}
-          />
+          <Route path="children/:parentUid/:childId" element={<ChildDetailsPage />} />
+          <Route path="clinical" element={<ClinicalPage />} />
+          <Route path="contents" element={<EducationalContentPage />} />
           <Route path="reports" element={<ReportsPage />} />
         </Route>
 
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
-      <Route path="/clinical" element={<ClinicalPage />} />
     </BrowserRouter>
   );
 }
